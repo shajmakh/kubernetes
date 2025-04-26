@@ -91,6 +91,7 @@ type PreEnqueueCheck func(pod *v1.Pod) bool
 // makes it easy to use those data structures as a SchedulingQueue.
 type SchedulingQueue interface {
 	framework.PodNominator
+	// Add adds a pod to the active queue. It should be called only on completely new pods
 	Add(logger klog.Logger, pod *v1.Pod)
 	// Activate moves the given pods to activeQ.
 	// If a pod isn't found in unschedulablePods or backoffQ and it's in-flight,
@@ -112,13 +113,26 @@ type SchedulingQueue interface {
 	// Done must be called for pod returned by Pop. This allows the queue to
 	// keep track of which pods are currently being processed.
 	Done(types.UID)
+	// Update updates a pod in the active or backoff queue if present. Otherwise, it removes
+	// the item from the unschedulable queue if pod is updated in a way that it may
+	// become schedulable and adds the updated one to the active queue.
+	// If pod is not present in any of the queues, it is added to the active queue.
 	Update(logger klog.Logger, oldPod, newPod *v1.Pod)
+	// Delete deletes the item from either of the two queues. It assumes the pod is
+	// only in one queue.
 	Delete(pod *v1.Pod)
+	// MoveAllToActiveOrBackoffQueue moves all pods from unschedulablePods to activeQ or backoffQ.
+	// This function adds all pods and then signals the condition variable to ensure that
+	// if Pop() is waiting for an item, it receives the signal after all the pods are in the
+	// queue and the head is the highest priority pod.
 	// Important Note: preCheck shouldn't include anything that depends on the in-tree plugins' logic.
 	// (e.g., filter Pods based on added/updated Node's capacity, etc.)
 	// We know currently some do, but we'll eventually remove them in favor of the scheduling queue hint.
 	MoveAllToActiveOrBackoffQueue(logger klog.Logger, event framework.ClusterEvent, oldObj, newObj interface{}, preCheck PreEnqueueCheck)
+	// AssignedPodAdded is called when a bound pod is added. Creation of this pod
+	// may make pending pods with matching affinity terms schedulable.
 	AssignedPodAdded(logger klog.Logger, pod *v1.Pod)
+	// AssignedPodUpdated is called when a bound pod is updated
 	AssignedPodUpdated(logger klog.Logger, oldPod, newPod *v1.Pod, event framework.ClusterEvent)
 
 	// Close closes the SchedulingQueue so that the goroutine which is
@@ -128,12 +142,18 @@ type SchedulingQueue interface {
 	Run(logger klog.Logger)
 
 	// The following functions are supposed to be used only for testing or debugging.
+	// GetPod searches for a pod in the activeQ, backoffQ, and unschedulablePods, and returns its info if found, nil otherwise
 	GetPod(name, namespace string) (*framework.QueuedPodInfo, bool)
+	// PendingPods returns all the pending pods in the queue; accompanied by a debugging string
+	// recording showing the number of pods in each queue respectively.
 	PendingPods() ([]*v1.Pod, string)
+	// InFlightPods returns all in-flight pods which are pods that the scheduler picked from the queue and actively attempting to find a suitable node for.
 	InFlightPods() []*v1.Pod
+	// PodsInActiveQ returns all the Pods in the activeQ.
 	PodsInActiveQ() []*v1.Pod
 	// PodsInBackoffQ returns all the Pods in the backoffQ.
 	PodsInBackoffQ() []*v1.Pod
+	// UnschedulablePods returns all the pods in unschedulable state
 	UnschedulablePods() []*v1.Pod
 }
 
@@ -889,6 +909,7 @@ func (p *PriorityQueue) Done(pod types.UID) {
 	p.activeQ.done(pod)
 }
 
+// InFlightPods returns all in-flight pods which are pods that the scheduler picked from the queue and actively attempting to find a suitable node for.
 func (p *PriorityQueue) InFlightPods() []*v1.Pod {
 	if !p.isSchedulingQueueHintEnabled {
 		// do nothing if schedulingQueueHint is disabled.
@@ -1217,7 +1238,7 @@ func (p *PriorityQueue) UnschedulablePods() []*v1.Pod {
 
 var pendingPodsSummary = "activeQ:%v; backoffQ:%v; unschedulablePods:%v"
 
-// GetPod searches for a pod in the activeQ, backoffQ, and unschedulablePods.
+// GetPod searches for a pod in the activeQ, backoffQ, and unschedulablePods, and returns its info if found, nil otherwise
 func (p *PriorityQueue) GetPod(name, namespace string) (pInfo *framework.QueuedPodInfo, ok bool) {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
