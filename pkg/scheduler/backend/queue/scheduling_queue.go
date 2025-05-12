@@ -17,11 +17,11 @@ limitations under the License.
 // This file contains structures that implement scheduling queue types.
 // Scheduling queues hold pods waiting to be scheduled. This file implements a
 // priority queue which has two sub queues and a additional data structure,
-// namely: activeQ, backoffQ and unschedulablePods.
+// namely: activeQ, backoffQ and unschedulable.
 // - activeQ holds pods that are being considered for scheduling.
-// - backoffQ holds pods that moved from unschedulablePods and will move to
+// - backoffQ holds pods that moved from unschedulable and will move to
 //   activeQ when their backoff periods complete.
-// - unschedulablePods holds pods that were already attempted for scheduling and
+// - unschedulable holds pods that were already attempted for scheduling and
 //   are currently determined to be unschedulable.
 
 package queue
@@ -57,15 +57,15 @@ import (
 
 const (
 	// DefaultPodMaxInUnschedulablePodsDuration is the default value for the maximum
-	// time a pod can stay in unschedulablePods. If a pod stays in unschedulablePods
-	// for longer than this value, the pod will be moved from unschedulablePods to
+	// time a pod can stay in unschedulable. If a pod stays in unschedulable
+	// for longer than this value, the pod will be moved from unschedulable to
 	// backoffQ or activeQ. If this value is empty, the default value (5min)
 	// will be used.
 	DefaultPodMaxInUnschedulablePodsDuration time.Duration = 5 * time.Minute
 	// Scheduling queue names
-	activeQ           = "Active"
-	backoffQ          = "Backoff"
-	unschedulablePods = "Unschedulable"
+	activeQ       = "Active"
+	backoffQ      = "Backoff"
+	unschedulable = "Unschedulable"
 
 	preEnqueue = "PreEnqueue"
 )
@@ -94,9 +94,9 @@ type SchedulingQueue interface {
 	// Add adds a pod to the active queue. It should be called only on completely new pods
 	Add(logger klog.Logger, pod *v1.Pod)
 	// Activate moves the given pods to activeQ.
-	// If a pod isn't found in unschedulablePods or backoffQ and it's in-flight,
+	// If a pod isn't found in unschedulable or backoffQ and it's in-flight,
 	// the wildcard event is registered so that the pod will be requeued when it comes back.
-	// But, if a pod isn't found in unschedulablePods or backoffQ and it's not in-flight (i.e., completely unknown pod),
+	// But, if a pod isn't found in unschedulable or backoffQ and it's not in-flight (i.e., completely unknown pod),
 	// Activate would ignore the pod.
 	Activate(logger klog.Logger, pods map[string]*v1.Pod)
 	// AddUnschedulableIfNotPresent adds an unschedulable pod back to scheduling queue.
@@ -121,7 +121,7 @@ type SchedulingQueue interface {
 	// Delete deletes the item from either of the two queues. It assumes the pod is
 	// only in one queue.
 	Delete(pod *v1.Pod)
-	// MoveAllToActiveOrBackoffQueue moves all pods from unschedulablePods to activeQ or backoffQ.
+	// MoveAllToActiveOrBackoffQueue moves all pods from unschedulable to activeQ or backoffQ.
 	// This function adds all pods and then signals the condition variable to ensure that
 	// if Pop() is waiting for an item, it receives the signal after all the pods are in the
 	// queue and the head is the highest priority pod.
@@ -142,7 +142,7 @@ type SchedulingQueue interface {
 	Run(logger klog.Logger)
 
 	// The following functions are supposed to be used only for testing or debugging.
-	// GetPod searches for a pod in the activeQ, backoffQ, and unschedulablePods, and returns its info if found, nil otherwise
+	// GetPod searches for a pod in the activeQ, backoffQ, and unschedulable, and returns its info if found, nil otherwise
 	GetPod(name, namespace string) (*framework.QueuedPodInfo, bool)
 	// PendingPods returns all the pending pods in the queue; accompanied by a debugging string
 	// recording showing the number of pods in each queue respectively.
@@ -168,11 +168,11 @@ func NewSchedulingQueue(
 // PriorityQueue implements a scheduling queue.
 // The head of PriorityQueue is the highest priority pending pod. This structure
 // has two sub queues and a additional data structure, namely: activeQ,
-// backoffQ and unschedulablePods.
+// backoffQ and unschedulable.
 //   - activeQ holds pods that are being considered for scheduling.
-//   - backoffQ holds pods that moved from unschedulablePods and will move to
+//   - backoffQ holds pods that moved from unschedulable and will move to
 //     activeQ when their backoff periods complete.
-//   - unschedulablePods holds pods that were already attempted for scheduling and
+//   - unschedulable holds pods that were already attempted for scheduling and
 //     are currently determined to be unschedulable.
 type PriorityQueue struct {
 	*nominator
@@ -578,7 +578,7 @@ func (p *PriorityQueue) runPreEnqueuePlugin(ctx context.Context, pl framework.Pr
 }
 
 // moveToActiveQ tries to add the pod to the active queue.
-// If the pod doesn't pass PreEnqueue plugins, it gets added to unschedulablePods instead.
+// If the pod doesn't pass PreEnqueue plugins, it gets added to unschedulable instead.
 // It returns a boolean flag to indicate whether the pod is added successfully.
 func (p *PriorityQueue) moveToActiveQ(logger klog.Logger, pInfo *framework.QueuedPodInfo, event string) bool {
 	gatedBefore := pInfo.Gated
@@ -592,7 +592,7 @@ func (p *PriorityQueue) moveToActiveQ(logger klog.Logger, pInfo *framework.Queue
 	added := false
 	p.activeQ.underLock(func(unlockedActiveQ unlockedActiveQueuer) {
 		if pInfo.Gated {
-			// Add the Pod to unschedulablePods if it's not passing PreEnqueuePlugins.
+			// Add the Pod to unschedulable if it's not passing PreEnqueuePlugins.
 			if unlockedActiveQ.has(pInfo) {
 				return
 			}
@@ -603,7 +603,7 @@ func (p *PriorityQueue) moveToActiveQ(logger klog.Logger, pInfo *framework.Queue
 				return
 			}
 			p.unschedulablePods.addOrUpdate(pInfo, event)
-			logger.V(5).Info("Pod moved to an internal scheduling queue, because the pod is gated", "pod", klog.KObj(pInfo.Pod), "event", event, "queue", unschedulablePods)
+			logger.V(5).Info("Pod moved to an internal scheduling queue, because the pod is gated", "pod", klog.KObj(pInfo.Pod), "event", event, "queue", unschedulable)
 			return
 		}
 		if pInfo.InitialAttemptTimestamp == nil {
@@ -625,7 +625,7 @@ func (p *PriorityQueue) moveToActiveQ(logger klog.Logger, pInfo *framework.Queue
 }
 
 // moveToBackoffQ tries to add the pod to the backoff queue.
-// If SchedulerPopFromBackoffQ feature gate is enabled and the pod doesn't pass PreEnqueue plugins, it gets added to unschedulablePods instead.
+// If SchedulerPopFromBackoffQ feature gate is enabled and the pod doesn't pass PreEnqueue plugins, it gets added to unschedulable instead.
 // It returns a boolean flag to indicate whether the pod is added successfully.
 func (p *PriorityQueue) moveToBackoffQ(logger klog.Logger, pInfo *framework.QueuedPodInfo, event string) bool {
 	// If SchedulerPopFromBackoffQ feature gate is enabled,
@@ -636,7 +636,7 @@ func (p *PriorityQueue) moveToBackoffQ(logger klog.Logger, pInfo *framework.Queu
 		if pInfo.Gated {
 			if p.unschedulablePods.get(pInfo.Pod) == nil {
 				p.unschedulablePods.addOrUpdate(pInfo, event)
-				logger.V(5).Info("Pod moved to an internal scheduling queue", "pod", klog.KObj(pInfo.Pod), "event", event, "queue", unschedulablePods)
+				logger.V(5).Info("Pod moved to an internal scheduling queue", "pod", klog.KObj(pInfo.Pod), "event", event, "queue", unschedulable)
 			}
 			return false
 		}
@@ -659,9 +659,9 @@ func (p *PriorityQueue) Add(logger klog.Logger, pod *v1.Pod) {
 }
 
 // Activate moves the given pods to activeQ.
-// If a pod isn't found in unschedulablePods or backoffQ and it's in-flight,
+// If a pod isn't found in unschedulable or backoffQ and it's in-flight,
 // the wildcard event is registered so that the pod will be requeued when it comes back.
-// But, if a pod isn't found in unschedulablePods or backoffQ and it's not in-flight (i.e., completely unknown pod),
+// But, if a pod isn't found in unschedulable or backoffQ and it's not in-flight (i.e., completely unknown pod),
 // Activate would ignore the pod.
 func (p *PriorityQueue) Activate(logger klog.Logger, pods map[string]*v1.Pod) {
 	p.lock.Lock()
@@ -689,9 +689,9 @@ func (p *PriorityQueue) Activate(logger klog.Logger, pods map[string]*v1.Pod) {
 
 func (p *PriorityQueue) activate(logger klog.Logger, pod *v1.Pod) bool {
 	var pInfo *framework.QueuedPodInfo
-	// Verify if the pod is present in unschedulablePods or backoffQ.
+	// Verify if the pod is present in unschedulable or backoffQ.
 	if pInfo = p.unschedulablePods.get(pod); pInfo == nil {
-		// If the pod doesn't belong to unschedulablePods or backoffQ, don't activate it.
+		// If the pod doesn't belong to unschedulable or backoffQ, don't activate it.
 		// The pod can be already in activeQ.
 		var exists bool
 		pInfo, exists = p.backoffQ.get(newQueuedPodInfoForLookup(pod))
@@ -763,7 +763,7 @@ func (p *PriorityQueue) determineSchedulingHintForInFlightPod(logger klog.Logger
 
 // addUnschedulableIfNotPresentWithoutQueueingHint inserts a pod that cannot be scheduled into
 // the queue, unless it is already in the queue. Normally, PriorityQueue puts
-// unschedulable pods in `unschedulablePods`. But if there has been a recent move
+// unschedulable pods in `unschedulable`. But if there has been a recent move
 // request, then the pod is put in `backoffQ`.
 // TODO: This function is called only when p.isSchedulingQueueHintEnabled is false,
 // and this will be removed after SchedulingQueueHint goes to stable and the feature gate is removed.
@@ -777,7 +777,7 @@ func (p *PriorityQueue) addUnschedulableWithoutQueueingHint(logger klog.Logger, 
 	rejectorPlugins := pInfo.UnschedulablePlugins.Union(pInfo.PendingPlugins)
 
 	// If a move request has been received, move it to the BackoffQ, otherwise move
-	// it to unschedulablePods.
+	// it to unschedulable.
 	for plugin := range rejectorPlugins {
 		metrics.UnschedulableReason(plugin, pInfo.Pod.Spec.SchedulerName).Inc()
 	}
@@ -795,7 +795,7 @@ func (p *PriorityQueue) addUnschedulableWithoutQueueingHint(logger klog.Logger, 
 		}
 	} else {
 		p.unschedulablePods.addOrUpdate(pInfo, framework.ScheduleAttemptFailure)
-		logger.V(5).Info("Pod moved to an internal scheduling queue", "pod", klog.KObj(pod), "event", framework.ScheduleAttemptFailure, "queue", unschedulablePods)
+		logger.V(5).Info("Pod moved to an internal scheduling queue", "pod", klog.KObj(pod), "event", framework.ScheduleAttemptFailure, "queue", unschedulable)
 	}
 
 	return nil
@@ -803,7 +803,7 @@ func (p *PriorityQueue) addUnschedulableWithoutQueueingHint(logger klog.Logger, 
 
 // AddUnschedulableIfNotPresent inserts a pod that cannot be scheduled into
 // the queue, unless it is already in the queue. Normally, PriorityQueue puts
-// unschedulable pods in `unschedulablePods`. But if there has been a recent move
+// unschedulable pods in `unschedulable`. But if there has been a recent move
 // request, then the pod is put in `backoffQ`.
 func (p *PriorityQueue) AddUnschedulableIfNotPresent(logger klog.Logger, pInfo *framework.QueuedPodInfo, podSchedulingCycle int64) error {
 	p.lock.Lock()
@@ -833,7 +833,7 @@ func (p *PriorityQueue) AddUnschedulableIfNotPresent(logger klog.Logger, pInfo *
 	pInfo.Timestamp = p.clock.Now()
 
 	// If a move request has been received, move it to the BackoffQ, otherwise move
-	// it to unschedulablePods.
+	// it to unschedulable.
 	rejectorPlugins := pInfo.UnschedulablePlugins.Union(pInfo.PendingPlugins)
 	for plugin := range rejectorPlugins {
 		metrics.UnschedulableReason(plugin, pInfo.Pod.Spec.SchedulerName).Inc()
@@ -869,7 +869,7 @@ func (p *PriorityQueue) flushBackoffQCompleted(logger klog.Logger) {
 	}
 }
 
-// flushUnschedulablePodsLeftover moves pods which stay in unschedulablePods
+// flushUnschedulablePodsLeftover moves pods which stay in unschedulable
 // longer than podMaxInUnschedulablePodsDuration to backoffQ or activeQ.
 func (p *PriorityQueue) flushUnschedulablePodsLeftover(logger klog.Logger) {
 	p.lock.Lock()
@@ -988,7 +988,7 @@ func (p *PriorityQueue) Update(logger klog.Logger, oldPod, newPod *v1.Pod) {
 			for _, evt := range events {
 				hint := p.isPodWorthRequeuing(logger, pInfo, evt, oldPod, newPod)
 				queue := p.requeuePodViaQueueingHint(logger, pInfo, hint, evt.Label())
-				if queue != unschedulablePods {
+				if queue != unschedulable {
 					logger.V(5).Info("Pod moved to an internal scheduling queue because the Pod is updated", "pod", klog.KObj(newPod), "event", evt.Label(), "queue", queue)
 					p.unschedulablePods.delete(pInfo.Pod, gated)
 				}
@@ -1000,7 +1000,7 @@ func (p *PriorityQueue) Update(logger klog.Logger, oldPod, newPod *v1.Pod) {
 			return
 		}
 		if isPodUpdated(oldPod, newPod) {
-			// Pod might have completed its backoff time while being in unschedulablePods,
+			// Pod might have completed its backoff time while being in unschedulable,
 			// so we should check isPodBackingoff before moving the pod to backoffQ.
 			if p.backoffQ.isPodBackingoff(pInfo) {
 				if added := p.moveToBackoffQ(logger, pInfo, framework.EventUnscheduledPodUpdate.Label()); added {
@@ -1075,14 +1075,14 @@ func (p *PriorityQueue) AssignedPodUpdated(logger klog.Logger, oldPod, newPod *v
 }
 
 // NOTE: this function assumes a lock has been acquired in the caller.
-// moveAllToActiveOrBackoffQueue moves all pods from unschedulablePods to activeQ or backoffQ.
+// moveAllToActiveOrBackoffQueue moves all pods from unschedulable to activeQ or backoffQ.
 // This function adds all pods and then signals the condition variable to ensure that
 // if Pop() is waiting for an item, it receives the signal after all the pods are in the
 // queue and the head is the highest priority pod.
 func (p *PriorityQueue) moveAllToActiveOrBackoffQueue(logger klog.Logger, event framework.ClusterEvent, oldObj, newObj interface{}, preCheck PreEnqueueCheck) {
 	if !p.isEventOfInterest(logger, event) {
 		// No plugin is interested in this event.
-		// Return early before iterating all pods in unschedulablePods for preCheck.
+		// Return early before iterating all pods in unschedulable for preCheck.
 		return
 	}
 
@@ -1095,7 +1095,7 @@ func (p *PriorityQueue) moveAllToActiveOrBackoffQueue(logger klog.Logger, event 
 	p.movePodsToActiveOrBackoffQueue(logger, unschedulablePods, event, oldObj, newObj)
 }
 
-// MoveAllToActiveOrBackoffQueue moves all pods from unschedulablePods to activeQ or backoffQ.
+// MoveAllToActiveOrBackoffQueue moves all pods from unschedulable to activeQ or backoffQ.
 // This function adds all pods and then signals the condition variable to ensure that
 // if Pop() is waiting for an item, it receives the signal after all the pods are in the
 // queue and the head is the highest priority pod.
@@ -1112,16 +1112,16 @@ func (p *PriorityQueue) MoveAllToActiveOrBackoffQueue(logger klog.Logger, event 
 func (p *PriorityQueue) requeuePodViaQueueingHint(logger klog.Logger, pInfo *framework.QueuedPodInfo, strategy queueingStrategy, event string) string {
 	if strategy == queueSkip {
 		p.unschedulablePods.addOrUpdate(pInfo, event)
-		return unschedulablePods
+		return unschedulable
 	}
 
-	// Pod might have completed its backoff time while being in unschedulablePods,
+	// Pod might have completed its backoff time while being in unschedulable,
 	// so we should check isPodBackingoff before moving the pod to backoffQ.
 	if strategy == queueAfterBackoff && p.backoffQ.isPodBackingoff(pInfo) {
 		if added := p.moveToBackoffQ(logger, pInfo, event); added {
 			return backoffQ
 		}
-		return unschedulablePods
+		return unschedulable
 	}
 
 	// Reach here if schedulingHint is QueueImmediately, or schedulingHint is Queue but the pod is not backing off.
@@ -1129,7 +1129,7 @@ func (p *PriorityQueue) requeuePodViaQueueingHint(logger klog.Logger, pInfo *fra
 		return activeQ
 	}
 	// Pod is gated. We don't have to push it back to unschedulable queue, because moveToActiveQ should already have done that.
-	return unschedulablePods
+	return unschedulable
 }
 
 // NOTE: this function assumes lock has been acquired in caller
@@ -1148,7 +1148,7 @@ func (p *PriorityQueue) movePodsToActiveOrBackoffQueue(logger klog.Logger, podIn
 		// except the Pods themselves got updated, which isn't handled by movePodsToActiveOrBackoffQueue.
 		// So, we can skip them early here so that they don't go through isPodWorthRequeuing,
 		// which isn't fast enough to keep a sufficient scheduling throughput
-		// when the number of scheduling-gated Pods in unschedulablePods is large.
+		// when the number of scheduling-gated Pods in unschedulable is large.
 		// https://github.com/kubernetes/kubernetes/issues/124384
 		// This is a hotfix for this issue, which might be changed
 		// once we have a better general solution for the shared lock issue.
@@ -1236,9 +1236,9 @@ func (p *PriorityQueue) UnschedulablePods() []*v1.Pod {
 	return result
 }
 
-var pendingPodsSummary = "activeQ:%v; backoffQ:%v; unschedulablePods:%v"
+var pendingPodsSummary = "activeQ:%v; backoffQ:%v; unschedulable:%v"
 
-// GetPod searches for a pod in the activeQ, backoffQ, and unschedulablePods, and returns its info if found, nil otherwise
+// GetPod searches for a pod in the activeQ, backoffQ, and unschedulable, and returns its info if found, nil otherwise
 func (p *PriorityQueue) GetPod(name, namespace string) (pInfo *framework.QueuedPodInfo, ok bool) {
 	p.lock.RLock()
 	defer p.lock.RUnlock()

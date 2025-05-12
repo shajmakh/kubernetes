@@ -45,7 +45,7 @@ type nominator struct {
 	podLister listersv1.PodLister
 	// nominatedPods is a map keyed by a node name and the value is a list of
 	// pods which are nominated to run on the node. These are pods which can be in
-	// the activeQ or unschedulablePods.
+	// the activeQ or unschedulable.
 	nominatedPods map[string][]podRef
 	// nominatedPodToNode is map keyed by a Pod UID to the node name where it is
 	// nominated.

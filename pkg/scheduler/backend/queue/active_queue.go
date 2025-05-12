@@ -40,25 +40,10 @@ type activeQueuer interface {
 	underLock(func(unlockedActiveQ unlockedActiveQueuer))
 	// underLock runs unlockedActiveQueueReader function under the lock.RLock.
 	underRLock(func(unlockedActiveQ unlockedActiveQueueReader))
-	// update updates the pod in activeQ if oldPodInfo is already in the queue.
-	// It returns new pod info if updated, nil otherwise.
-	update(newPod *v1.Pod, oldPodInfo *framework.QueuedPodInfo) *framework.QueuedPodInfo
-
-	// delete deletes the pod info from activeQ.
-	delete(pInfo *framework.QueuedPodInfo) error
-
 	// pop removes the head of the queue and returns it.
 	// It blocks if the queue is empty and waits until a new item is added to the queue.
 	// It increments scheduling cycle when a pod is popped.
 	pop(logger klog.Logger) (*framework.QueuedPodInfo, error)
-	// list returns all pods that are in the queue.
-	list() []*v1.Pod
-	// len returns length of the queue.
-	len() int
-	// has returns if pInfo exists in the queue.
-	// This method should be called in activeQueue.underLock() or activeQueue.underRLock().
-	has(pInfo *framework.QueuedPodInfo) bool
-
 	// listInFlightEvents returns all inFlightEvents.
 	listInFlightEvents() []interface{}
 	// listInFlightPods returns all inFlightPods.
@@ -71,7 +56,6 @@ type activeQueuer interface {
 	// addEventIfAnyInFlight adds clusterEvent to inFlightEvents if any pod is in inFlightPods.
 	// It returns true if pushed the event to the inFlightEvents.
 	addEventIfAnyInFlight(oldObj, newObj interface{}, event framework.ClusterEvent) bool
-
 	// SchedulingCycle returns current scheduling cycle.
 	schedulingCycle() int64
 	// done must be called for pod returned by Pop. This allows the queue to
@@ -81,6 +65,19 @@ type activeQueuer interface {
 	close()
 	// broadcast notifies the pop() operation that new pod(s) was added to the activeQueue.
 	broadcast()
+
+	// update updates the pod in activeQ if oldPodInfo is already in the queue.
+	// It returns new pod info if updated, nil otherwise.
+	update(newPod *v1.Pod, oldPodInfo *framework.QueuedPodInfo) *framework.QueuedPodInfo
+	// delete deletes the pod info from activeQ.
+	delete(pInfo *framework.QueuedPodInfo) error
+	// has returns if pInfo exists in the queue.
+	// This method should be called in activeQueue.underLock() or activeQueue.underRLock().
+	has(pInfo *framework.QueuedPodInfo) bool
+	// list returns all pods that are in the queue.
+	list() []*v1.Pod
+	// len returns length of the queue.
+	len() int
 }
 
 // unlockedActiveQueuer defines activeQ methods that are not protected by the lock itself.

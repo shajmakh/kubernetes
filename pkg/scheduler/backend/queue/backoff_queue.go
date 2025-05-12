@@ -44,7 +44,6 @@ type backoffQueuer interface {
 	isPodBackingoff(podInfo *framework.QueuedPodInfo) bool
 	// popAllBackoffCompleted pops all pods from podBackoffQ and podErrorBackoffQ that completed backoff.
 	popAllBackoffCompleted(logger klog.Logger) []*framework.QueuedPodInfo
-
 	// podInitialBackoffDuration returns initial backoff duration that pod can get.
 	podInitialBackoffDuration() time.Duration
 	// podMaxBackoffDuration returns maximum backoff duration that pod can get.
